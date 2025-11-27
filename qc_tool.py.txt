@@ -1,0 +1,97 @@
+# qc_tool.py  
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+import easygui
+import sys
+
+# 日本語対応
+plt.rcParams['font.family'] = 'Meiryo' if sys.platform.startswith('win') else 'DejaVu Sans'
+
+# CSVファイルを選ぶウィンドウを出す
+file_path = easygui.fileopenbox(title="CSVファイルを選んでください", filetypes=["*.csv"])
+if not file_path:
+    print("キャンセルされました")
+    exit()
+
+# CSVを読み込む
+df = pd.read_csv(file_path)
+
+# 数値が入ってる列を自動で見つける
+numeric_cols = df.select_dtypes(include=[np.number]).columns
+if len(numeric_cols) == 0:
+    print("数値の列が見つかりません")
+    exit()
+elif len(numeric_cols) > 1:
+    col = easygui.choicebox("どの列を調べますか？", choices=list(numeric_cols))
+else:
+    col = numeric_cols[0]
+
+data = df[col].dropna()
+
+# 規格値（上限・下限）を聞く
+usl = easygui.enterbox(f"{col}の上限規格値（USL）を入力（空欄で無視）")
+lsl = easygui.enterbox(f"{col}の下限規格値（LSL）を入力（空欄で無視）")
+USL = float(usl) if usl else None
+LSL = float(lsl) if lsl else None
+
+# 計算
+mean = data.mean()
+std = data.std()
+lower_3sigma = mean - 3 * std
+upper_3sigma = mean + 3 * std
+outliers = data[(data < lower_3sigma) | (data > upper_3sigma)]
+
+if USL and LSL:
+    Cp = (USL - LSL) / (6 * std)
+    Cpk = min((USL - mean)/(3*std), (mean - LSL)/(3*std))
+else:
+    Cp = Cpk = None
+
+# 結果をコンソールに表示
+print("="*50)
+print(f"平均値        : {mean:.4f}")
+print(f"標準偏差      : {std:.4f}")
+print(f"±3σ範囲      : {lower_3sigma:.4f} ～ {upper_3sigma:.4f}")
+print(f"異常値（±3σ外）: {len(outliers)}個")
+if Cp:
+    print(f"Cp  = {Cp:.3f}")
+    print(f"Cpk = {Cpk:.3f}")
+print("="*50)
+
+# グラフ表示
+plt.figure(figsize=(12, 8))
+
+# 上：ヒストグラム
+plt.subplot(2, 1, 1)
+sns.histplot(data, kde=True, stat="density", bins=30, color="skyblue")
+x = np.linspace(data.min(), data.max(), 100)
+plt.plot(x, stats.norm.pdf(x, mean, std), 'red', linewidth=2, label="正規分布")
+plt.axvline(lower_3sigma, color='red', linestyle='--')
+plt.axvline(upper_3sigma, color='red', linestyle='--')
+if USL: plt.axvline(USL, color='green', linewidth=3, label=f"USL={USL}")
+if LSL: plt.axvline(LSL, color='green', linewidth=3, label=f"LSL={LSL}")
+plt.title(f"{col} の分布（±3σと規格限界）")
+plt.legend()
+
+# 下：時系列グラフ
+plt.subplot(2, 1, 2)
+plt.plot(data.values, 'o-', markersize=4)
+plt.axhline(mean, color='blue', label=f"平均 {mean:.3f}")
+plt.axhline(lower_3sigma, color='red', linestyle='--')
+plt.axhline(upper_3sigma, color='red', linestyle='--')
+if USL: plt.axhline(USL, color='green', linewidth=2)
+if LSL: plt.axhline(LSL, color='green', linewidth=2)
+plt.title("時系列＋異常値（赤で囲まれる）")
+plt.ylabel(col)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
+
+# 異常値があればCSVで保存
+if len(outliers) > 0:
+    outliers.to_csv("異常値リスト.csv", header=[col])
+    print("→ 異常値リスト.csv を保存しました！")
